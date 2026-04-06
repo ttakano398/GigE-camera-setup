@@ -3,23 +3,14 @@ from pathlib import Path
 
 import cv2
 
-
 DEFAULT_SERIAL = "08520932"
 WINDOW_NAME = "GigE Camera Viewer"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-MODE_CAPS = {
-    "max": "video/x-bayer,format=grbg,width=2592,height=1944,framerate=22/1",
-    "fhd": "video/x-bayer,format=grbg,width=1920,height=1080,framerate=30/1",
-}
 
-
-def make_pipeline(serial: str, mode: str) -> str:
-    caps = MODE_CAPS[mode]
+def make_pipeline(serial: str) -> str:
     return (
-        f'tcamsrc serial="{serial}" type=aravis ! '
-        f"{caps} ! "
-        "bayer2rgb ! "
+        f"tcamsrc serial={serial} ! "
         "videoconvert ! "
         "video/x-raw,format=BGR ! "
         "appsink sync=false drop=true max-buffers=1"
@@ -35,18 +26,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SERIAL,
         help=f"Camera serial number (default: {DEFAULT_SERIAL})",
     )
-    parser.add_argument(
-        "--mode",
-        choices=["max", "fhd"],
-        default="fhd",
-        help="Capture mode to preview",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    pipeline = make_pipeline(args.serial, args.mode)
+    pipeline = make_pipeline(args.serial)
     cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
     print("script_dir:", SCRIPT_DIR)
