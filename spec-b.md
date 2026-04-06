@@ -113,9 +113,7 @@
 流用しやすい要素:
 
 - `.venv` を repo 直下に作る方針
-- OpenCV を GStreamer + GTK 対応でビルドする方針
-- `CMAKE_ARGS="-DWITH_GSTREAMER=ON -DWITH_GTK=ON"`
-- ビルド後に `cv2.getBuildInformation()` で確認する流れ
+- 実行前に `cv2`, `gi`, `Gst`, `Tcam` の見え方を確認する流れ
 
 B 方針向けに追加確認したい要素:
 
@@ -124,6 +122,12 @@ B 方針向けに追加確認したい要素:
 - `from gi.repository import Tcam` が通ること
 - `Gst.init(None)` が通ること
 - `gst-inspect-1.0 tcamsrc` が通ること
+
+整理:
+
+- `setup.sh` は B 方針向けの軽量セットアップと検証用にする
+- OpenCV の build は B の必須条件にはしない
+- OpenCV を build する流れは `setup-opencv.sh` に寄せる
 
 ### 3.4 `README.md` / `README-opencv.md`
 
@@ -246,15 +250,15 @@ B 方針でも再利用価値が高い。
 
 最低限:
 
-- system 依存導入
+- runtime 依存導入
 - `.venv` 再作成
-- OpenCV の GStreamer / GTK 対応確認
+- 現在の OpenCV が見えていることの確認
 - `gi` / `Gst` 動作確認
 
 必要なら:
 
-- OpenCV ビルド手順は旧版と同様に維持
-- 追加で PyGObject 関連チェックを入れる
+- `cv2.aruco` と GUI backend の確認を入れる
+- build が必要なケースは `setup-opencv.sh` へ誘導する
 
 ### 6.4 `README.md`
 
@@ -550,7 +554,7 @@ phase:
 
 ## 12. 実装順の推奨
 
-1. `setup.sh` を整え、OpenCV / GStreamer / `gi` の確認が通る状態を作る
+1. `setup.sh` を整え、既存 OpenCV / GStreamer / `gi` の確認が通る状態を作る
 2. `viewer.py` を簡易プレビュー用として再実装し、接続確認を通す
 3. `continue_calib-gige.py` で `GigECameraController` だけ先に作る
 4. appsink から BGR `numpy.ndarray` を取れるところまで確認する

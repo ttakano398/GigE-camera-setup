@@ -2,7 +2,7 @@
 
 このディレクトリには、The Imaging Source の GigE カメラを Ubuntu 上で扱うための最小セットを置いています。
 
-- `setup.sh`: OpenCV を GStreamer + GTK 対応でビルドし、`.venv` を再作成するセットアップスクリプト
+- `setup.sh`: B 方針向けの軽量セットアップと環境確認を行うスクリプト
 - `viewer.py`: 接続確認用の簡易ビューワ
 - `continue_calib-gige.py`: `tcamsrc` + `TcamPropertyProvider` で live 更新しながら自動キャリブレーションする本命ツール
 - `*-opencv*`: A 方針の参考実装
@@ -22,6 +22,7 @@
 - 露光 / ゲイン / WB 更新時に配信を止めない
 
 `continue_calib-gige.py` は B 方針です。
+この `README.md` も B 方針前提です。A 方針の OpenCV build 前提の説明は `README-opencv.md` を参照してください。
 
 ## 2. 想定環境
 
@@ -29,7 +30,8 @@
 - TIS `tiscamera` 導入済み
 - `tcamsrc` が使用可能
 - Python 3.10 系
-- OpenCV が GStreamer + GUI backend 付き
+- OpenCV がすでに使えること
+- `cv2.aruco` が使える OpenCV であること
 - `python3-gi` / `python3-gst-1.0` が利用可能
 
 今回のカメラ前提:
@@ -56,7 +58,9 @@ chmod +x setup.sh
 source .venv/bin/activate
 ```
 
-`setup.sh` は `.venv` を `--system-site-packages` 付きで作るため、`python3-gi` / `python3-gst-1.0` を venv からも参照できます。
+`setup.sh` は `.venv` を `--system-site-packages` 付きで作り、B 方針で必要な runtime を確認します。B 方針では OpenCV の rebuild は行いません。
+
+もし `cv2.aruco` や GUI backend などの確認に失敗した場合だけ、A 方針向けの `setup-opencv.sh` と `README-opencv.md` を使って OpenCV build 側へ進んでください。
 
 ## 5. 接続確認
 

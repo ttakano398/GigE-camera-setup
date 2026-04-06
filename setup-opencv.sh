@@ -36,11 +36,12 @@ cd "$SRC_DIR"
 
 echo "[5/7] Build wheel with GStreamer + GTK"
 export CMAKE_ARGS="-DWITH_GSTREAMER=ON -DWITH_GTK=ON"
+export ENABLE_CONTRIB=1
 python -m pip wheel . --verbose
 
 echo "[6/7] Install built wheel into venv"
 ls -1 ./*.whl
-pip install --force-reinstall ./opencv_python-*.whl
+pip install --force-reinstall ./*.whl
 
 echo "[7/7] Move source tree aside and verify build"
 cd "$PROJECT_DIR"
