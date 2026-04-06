@@ -11,6 +11,7 @@ echo "[1/7] Install system dependencies"
 sudo apt update
 sudo apt install -y \
     build-essential cmake pkg-config python3-dev \
+    python3-gi python3-gst-1.0 \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-tools gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
@@ -19,7 +20,7 @@ sudo apt install -y \
 echo "[2/7] Recreate venv"
 mkdir -p "$PROJECT_DIR"
 rm -rf "$VENV_DIR"
-python3 -m venv "$VENV_DIR"
+python3 -m venv --system-site-packages "$VENV_DIR"
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
@@ -50,9 +51,15 @@ mv "$SRC_DIR" "$BACKUP_SRC_DIR"
 python - <<'PY'
 import sys
 import cv2
+import gi
+
+gi.require_version("Gst", "1.0")
+
+from gi.repository import Gst  # noqa: F401
 
 print("python:", sys.executable)
 print("cv2:", cv2.__file__)
+print("gi/Gst: OK")
 for line in cv2.getBuildInformation().splitlines():
     if "GStreamer" in line or "GUI" in line or "GTK" in line:
         print(line)

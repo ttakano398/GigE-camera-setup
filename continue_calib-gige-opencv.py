@@ -45,6 +45,9 @@ REOPEN_SLEEP_SEC = 0.10
 
 INITIAL_WINDOW_WIDTH = 1280
 INITIAL_WINDOW_HEIGHT = 720
+CENTER_DOT_RADIUS = 6
+CENTER_DOT_COLOR = (0, 0, 255)
+CENTER_DOT_THICKNESS = -1
 
 H_REF = 1000.0
 MARKER_WIDTH = H_REF * 0.85
@@ -84,9 +87,9 @@ class CameraState:
 
     exposure_us: int = 15000
     gain_db: float = 0.0
-    wb_red: float = 1.0
+    wb_red: float = 1.5
     wb_green: float = 1.0
-    wb_blue: float = 1.0
+    wb_blue: float = 1.75
 
 
 # ==========================================
@@ -131,6 +134,19 @@ def detect_markers(gray, aruco_dict):
     attrs = [x for x in dir(aruco) if "Detector" in x or "detect" in x or "Parameters" in x]
     raise RuntimeError(
         f"No usable ArUco API in this runtime. cv2={cv2.__version__}, attrs={attrs}"
+    )
+
+
+def draw_center_dot(frame):
+    height, width = frame.shape[:2]
+    center = (width // 2, height // 2)
+    cv2.circle(
+        frame,
+        center,
+        CENTER_DOT_RADIUS,
+        CENTER_DOT_COLOR,
+        CENTER_DOT_THICKNESS,
+        lineType=cv2.LINE_AA,
     )
 
 
@@ -198,9 +214,9 @@ def init_camera_settings(state: CameraState):
     state.wb_auto = False
     state.exposure_us = 15000
     state.gain_db = 0.0
-    state.wb_red = 1.0
+    state.wb_red = 1.5
     state.wb_green = 1.0
-    state.wb_blue = 1.0
+    state.wb_blue = 1.75
 
 
 def print_camera_state(state: CameraState):
@@ -437,6 +453,7 @@ def main(args):
 
             if skip_frames > 0:
                 skip_frames -= 1
+                draw_center_dot(frame)
                 cv2.imshow(WINDOW_NAME, frame)
                 cv2.waitKey(1)
                 continue
@@ -548,6 +565,7 @@ def main(args):
                 1,
             )
 
+            draw_center_dot(frame)
             cv2.imshow(WINDOW_NAME, frame)
 
             k = cv2.waitKey(1) & 0xFF
