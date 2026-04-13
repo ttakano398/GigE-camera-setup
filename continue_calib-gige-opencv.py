@@ -49,6 +49,11 @@ CENTER_DOT_RADIUS = 6
 CENTER_DOT_COLOR = (0, 0, 255)
 CENTER_DOT_THICKNESS = -1
 
+FISHEYE_DEFAULT_F_SCALE = 0.14
+FISHEYE_DEFAULT_ZOOM = 3.0
+FISHEYE_DEFAULT_OUTPUT_ZOOM = 2.0
+FISHEYE_DEFAULT_RESOLUTION_SCALE = 1.0
+
 H_REF = 1000.0
 MARKER_WIDTH = H_REF * 0.85
 OFFSET = (H_REF - MARKER_WIDTH) / 2
@@ -60,6 +65,67 @@ ID_MODE_IDX = 0
 ID_TARGET_SETS = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [0]]
 
 SEP_EXP_FINE, SEP_WB_RED, SEP_WB_BLUE, SEP_DONE = 0, 1, 2, 3
+
+
+class FisheyeCorrector:
+    def __init__(
+        self,
+        f_scale: float = FISHEYE_DEFAULT_F_SCALE,
+        zoom: float = FISHEYE_DEFAULT_ZOOM,
+        output_zoom: float = FISHEYE_DEFAULT_OUTPUT_ZOOM,
+        resolution_scale: float = FISHEYE_DEFAULT_RESOLUTION_SCALE,
+    ):
+        self.f_scale = float(f_scale)
+        self.zoom = float(zoom)
+        self.output_zoom = float(output_zoom)
+        self.resolution_scale = float(resolution_scale)
+        self.map_x = None
+        self.map_y = None
+        self.current_config = None
+
+    def _calculate_maps(self, width: int, height: int):
+        output_w = max(1, int(round(width * self.resolution_scale)))
+        output_h = max(1, int(round(height * self.resolution_scale)))
+        cx, cy = width / 2.0, height / 2.0
+
+        x = np.linspace(0, width - 1, output_w)
+        y = np.linspace(0, height - 1, output_h)
+        xx, yy = np.meshgrid(x, y)
+
+        dx = xx - cx
+        dy = yy - cy
+        radius = np.sqrt(dx ** 2 + dy ** 2)
+
+        focal = self.f_scale * min(width, height)
+        theta = np.arctan2(radius, focal)
+        cv_map = focal * theta
+
+        eps = 1e-8
+        map_x = (cx + (dx * self.zoom / (radius + eps)) * cv_map).astype(np.float32)
+        map_y = (cy + (dy * self.zoom / (radius + eps)) * cv_map).astype(np.float32)
+        return map_x, map_y
+
+    def _apply_output_zoom(self, frame: np.ndarray) -> np.ndarray:
+        if self.output_zoom <= 1.0:
+            return frame
+        h, w = frame.shape[:2]
+        crop_w = max(1, int(round(w / self.output_zoom)))
+        crop_h = max(1, int(round(h / self.output_zoom)))
+        x0 = max(0, (w - crop_w) // 2)
+        y0 = max(0, (h - crop_h) // 2)
+        cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
+        return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    def apply(self, frame: np.ndarray) -> np.ndarray:
+        if frame is None:
+            return frame
+        h, w = frame.shape[:2]
+        config = (w, h, self.resolution_scale)
+        if self.map_x is None or self.current_config != config:
+            self.map_x, self.map_y = self._calculate_maps(w, h)
+            self.current_config = config
+        corrected = cv2.remap(frame, self.map_x, self.map_y, interpolation=cv2.INTER_LINEAR)
+        return self._apply_output_zoom(corrected)
 
 
 # ==========================================
@@ -411,6 +477,15 @@ def main(args):
     state = CameraState(serial=args.serial)
     state.mode = MODE_MAX if args.mode == "max" else MODE_FHD
     init_camera_settings(state)
+    fisheye_corrector = FisheyeCorrector() if args.fisheye else None
+    if fisheye_corrector is not None:
+        logging.info(
+            "fisheye enabled: f_scale=%.2f zoom=%.1f output_zoom=%.1f resolution_scale=%.1f",
+            FISHEYE_DEFAULT_F_SCALE,
+            FISHEYE_DEFAULT_ZOOM,
+            FISHEYE_DEFAULT_OUTPUT_ZOOM,
+            FISHEYE_DEFAULT_RESOLUTION_SCALE,
+        )
 
     cap = open_capture(state)
     full_width, full_height = None, None
@@ -446,6 +521,8 @@ def main(args):
             ret, frame = cap.read()
             if not ret:
                 continue
+            if fisheye_corrector is not None:
+                frame = fisheye_corrector.apply(frame)
 
             if full_width is None or full_height is None:
                 full_height, full_width = frame.shape[:2]
@@ -643,6 +720,7 @@ if __name__ == "__main__":
     parser.add_argument("--serial", default=DEFAULT_SERIAL)
     parser.add_argument("--mode", choices=["max", "fhd"], default="fhd")
     parser.add_argument("--marker", choices=["aruco", "apriltag"], default="aruco")
+    parser.add_argument("--fisheye", action="store_true", help="Apply fisheye correction before calibration/visualization")
     args = parser.parse_args()
 
     update_roi_geometry()

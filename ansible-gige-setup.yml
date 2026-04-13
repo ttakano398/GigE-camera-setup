@@ -1,0 +1,304 @@
+---
+- name: GigE camera host + python setup
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    project_dir: "{{ playbook_dir }}"
+    venv_dir: "{{ project_dir }}/.venv"
+    opencv_src_dir: "{{ project_dir }}/opencv-python"
+    opencv_backup_src_dir: "{{ project_dir }}/opencv-python-src"
+    with_opencv_build: true
+
+    gige_env_file: "{{ project_dir }}/.gige.env"
+    default_mode: "max"
+    default_marker: "aruco"
+
+    apply_net: true
+    set_rp_filter: true
+    bring_up: true
+    bring_down: false
+    set_camera_static: true
+    camera_netmask: "255.255.255.0"
+    camera_gateway: "0.0.0.0"
+
+    install_tiscamera: true
+    tiscamera_deb: ""
+
+    cam1_nic: "enp134s0"
+    cam2_nic: "enp135s0"
+    cam3_nic: "enp136s0"
+
+    cam1_host_ip_cidr: "192.168.14.1/24"
+    cam2_host_ip_cidr: "192.168.15.1/24"
+    cam3_host_ip_cidr: "192.168.16.1/24"
+
+    cam1_camera_ip: "192.168.14.2"
+    cam2_camera_ip: "192.168.15.2"
+    cam3_camera_ip: "192.168.16.2"
+
+    cam1_serial: ""
+    cam2_serial: ""
+    cam3_serial: ""
+
+    setup_packages:
+      - python3-dev
+      - python3-venv
+      - python3-pip
+      - python3-gi
+      - python3-gst-1.0
+      - gir1.2-gstreamer-1.0
+      - gir1.2-gst-plugins-base-1.0
+      - gstreamer1.0-tools
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
+      - iproute2
+      - iputils-ping
+
+    opencv_build_packages:
+      - build-essential
+      - cmake
+      - pkg-config
+      - libgstreamer1.0-dev
+      - libgstreamer-plugins-base1.0-dev
+      - libgtk-3-dev
+      - git
+
+    python_packages:
+      - pip
+      - wheel
+      - setuptools
+      - numpy
+      - opencv-contrib-python
+
+  tasks:
+    - name: Install base system packages
+      become: true
+      ansible.builtin.apt:
+        name: "{{ setup_packages }}"
+        update_cache: true
+        state: present
+
+    - name: Install OpenCV build dependencies
+      become: true
+      ansible.builtin.apt:
+        name: "{{ opencv_build_packages }}"
+        state: present
+      when: with_opencv_build | bool
+
+    - name: Check tcam-gigetool
+      ansible.builtin.command: command -v tcam-gigetool
+      changed_when: false
+      failed_when: false
+      register: tcam_gigetool_check
+
+    - name: Install tiscamera from provided deb when tcam-gigetool is missing
+      become: true
+      ansible.builtin.apt:
+        deb: "{{ tiscamera_deb }}"
+        state: present
+      when:
+        - install_tiscamera | bool
+        - tcam_gigetool_check.rc != 0
+        - tiscamera_deb | length > 0
+
+    - name: Fail if tcam-gigetool is missing and no deb path was provided
+      ansible.builtin.fail:
+        msg: "tcam-gigetool is missing. Set -e install_tiscamera=true -e tiscamera_deb=/path/to/tiscamera.deb"
+      when:
+        - tcam_gigetool_check.rc != 0
+        - not (install_tiscamera | bool and tiscamera_deb | length > 0)
+
+    - name: Verify tcamsrc plugin
+      ansible.builtin.command: gst-inspect-1.0 tcamsrc
+      changed_when: false
+
+    - name: Bring camera NICs down when requested
+      become: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ip addr flush dev {{ item }}
+        ip link set dev {{ item }} down
+      args:
+        executable: /bin/bash
+      loop:
+        - "{{ cam1_nic }}"
+        - "{{ cam2_nic }}"
+        - "{{ cam3_nic }}"
+      when: bring_down | bool
+
+    - name: Bring camera NICs up when requested
+      become: true
+      ansible.builtin.command: ip link set dev {{ item }} up
+      loop:
+        - "{{ cam1_nic }}"
+        - "{{ cam2_nic }}"
+        - "{{ cam3_nic }}"
+      when: bring_up | bool
+
+    - name: Apply NIC host IPs
+      become: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ip addr flush dev {{ item.nic }}
+        ip addr add {{ item.host_cidr }} dev {{ item.nic }}
+      args:
+        executable: /bin/bash
+      loop:
+        - { nic: "{{ cam1_nic }}", host_cidr: "{{ cam1_host_ip_cidr }}" }
+        - { nic: "{{ cam2_nic }}", host_cidr: "{{ cam2_host_ip_cidr }}" }
+        - { nic: "{{ cam3_nic }}", host_cidr: "{{ cam3_host_ip_cidr }}" }
+      when: apply_net | bool
+
+    - name: Disable per-NIC rp_filter
+      become: true
+      ansible.builtin.command: sysctl -w net.ipv4.conf.{{ item }}.rp_filter=0
+      loop:
+        - "{{ cam1_nic }}"
+        - "{{ cam2_nic }}"
+        - "{{ cam3_nic }}"
+      when: set_rp_filter | bool
+
+    - name: Disable global rp_filter
+      become: true
+      ansible.builtin.command: sysctl -w {{ item }}=0
+      loop:
+        - net.ipv4.conf.all.rp_filter
+        - net.ipv4.conf.default.rp_filter
+      when: set_rp_filter | bool
+
+    - name: List cameras in order
+      ansible.builtin.command: tcam-gigetool list --format s
+      changed_when: false
+      register: tcam_list_s
+
+    - name: Build ordered serial list
+      ansible.builtin.set_fact:
+        ordered_serials: "{{ tcam_list_s.stdout | regex_findall('\\b\\d{7,16}\\b') | unique }}"
+
+    - name: Auto assign serials from detected camera order
+      ansible.builtin.set_fact:
+        cam1_serial: "{{ cam1_serial if cam1_serial | length > 0 else (ordered_serials[0] if ordered_serials | length > 0 else '') }}"
+        cam2_serial: "{{ cam2_serial if cam2_serial | length > 0 else (ordered_serials[1] if ordered_serials | length > 1 else '') }}"
+        cam3_serial: "{{ cam3_serial if cam3_serial | length > 0 else (ordered_serials[2] if ordered_serials | length > 2 else '') }}"
+
+    - name: Set static camera IPs when serials are known
+      ansible.builtin.command: >-
+        tcam-gigetool set --ip {{ item.ip }} --netmask {{ camera_netmask }} --gateway {{ camera_gateway }} --mode static {{ item.serial }}
+      loop:
+        - { name: CAM1, ip: "{{ cam1_camera_ip }}", serial: "{{ cam1_serial }}" }
+        - { name: CAM2, ip: "{{ cam2_camera_ip }}", serial: "{{ cam2_serial }}" }
+        - { name: CAM3, ip: "{{ cam3_camera_ip }}", serial: "{{ cam3_serial }}" }
+      when:
+        - set_camera_static | bool
+        - item.serial | length > 0
+      changed_when: true
+
+    - name: Ping cameras from mapped host IPs
+      ansible.builtin.command: >-
+        ping -I {{ item.src_ip }} -c 2 -W 1 {{ item.dst_ip }}
+      loop:
+        - { name: CAM1, src_ip: "{{ cam1_host_ip_cidr | regex_replace('/.*$', '') }}", dst_ip: "{{ cam1_camera_ip }}" }
+        - { name: CAM2, src_ip: "{{ cam2_host_ip_cidr | regex_replace('/.*$', '') }}", dst_ip: "{{ cam2_camera_ip }}" }
+        - { name: CAM3, src_ip: "{{ cam3_host_ip_cidr | regex_replace('/.*$', '') }}", dst_ip: "{{ cam3_camera_ip }}" }
+      register: ping_result
+      changed_when: false
+      failed_when: false
+
+    - name: Recreate virtualenv directory
+      ansible.builtin.file:
+        path: "{{ venv_dir }}"
+        state: absent
+
+    - name: Create virtualenv with system-site-packages
+      ansible.builtin.command: python3 -m venv --system-site-packages {{ venv_dir }}
+      args:
+        creates: "{{ venv_dir }}/bin/activate"
+
+    - name: Upgrade pip tooling in virtualenv
+      ansible.builtin.pip:
+        name:
+          - pip
+          - wheel
+          - setuptools
+        virtualenv: "{{ venv_dir }}"
+        state: latest
+
+    - name: Install python dependencies
+      ansible.builtin.pip:
+        name: "{{ python_packages }}"
+        virtualenv: "{{ venv_dir }}"
+
+    - name: Install scikit-build for custom OpenCV build
+      ansible.builtin.pip:
+        name: scikit-build
+        virtualenv: "{{ venv_dir }}"
+        state: latest
+      when: with_opencv_build | bool
+
+    - name: Remove previous OpenCV build source
+      ansible.builtin.file:
+        path: "{{ opencv_src_dir }}"
+        state: absent
+      when: with_opencv_build | bool
+
+    - name: Remove previous OpenCV backup source
+      ansible.builtin.file:
+        path: "{{ opencv_backup_src_dir }}"
+        state: absent
+      when: with_opencv_build | bool
+
+    - name: Clone opencv-python source
+      ansible.builtin.git:
+        repo: https://github.com/opencv/opencv-python.git
+        dest: "{{ opencv_src_dir }}"
+        recursive: true
+      when: with_opencv_build | bool
+
+    - name: Build OpenCV wheel with GStreamer + GTK
+      ansible.builtin.command: "{{ venv_dir }}/bin/python -m pip wheel . --verbose"
+      args:
+        chdir: "{{ opencv_src_dir }}"
+      environment:
+        CMAKE_ARGS: -DWITH_GSTREAMER=ON -DWITH_GTK=ON
+      when: with_opencv_build | bool
+
+    - name: Find built OpenCV wheel
+      ansible.builtin.find:
+        paths: "{{ opencv_src_dir }}"
+        patterns: "opencv_python-*.whl"
+      register: built_opencv_whl
+      when: with_opencv_build | bool
+
+    - name: Install built OpenCV wheel
+      ansible.builtin.pip:
+        name: "{{ built_opencv_whl.files[0].path }}"
+        virtualenv: "{{ venv_dir }}"
+        extra_args: --force-reinstall
+      when:
+        - with_opencv_build | bool
+        - built_opencv_whl.matched | int > 0
+
+    - name: Move source tree aside
+      ansible.builtin.command: mv {{ opencv_src_dir }} {{ opencv_backup_src_dir }}
+      when: with_opencv_build | bool
+
+    - name: Runtime verification
+      ansible.builtin.command: "{{ venv_dir }}/bin/python -c \"import sys,cv2,gi;gi.require_version('Gst','1.0');gi.require_version('Tcam','1.0');from gi.repository import Gst;Gst.init(None);print('python:',sys.executable);print('cv2:',cv2.__file__);print('cv2 version:',cv2.__version__);print('has cv2.aruco:',hasattr(cv2,'aruco'));print('gi/Gst/Tcam: ok')\""
+      changed_when: false
+
+    - name: Write .gige.env
+      ansible.builtin.template:
+        src: "{{ project_dir }}/templates/gige.env.j2"
+        dest: "{{ gige_env_file }}"
+        mode: "0644"
+
+    - name: Show final camera mapping
+      ansible.builtin.debug:
+        msg:
+          - "CAM1: NIC={{ cam1_nic }} HOST={{ cam1_host_ip_cidr }} CAM_IP={{ cam1_camera_ip }} SERIAL={{ cam1_serial | default('<unknown>') }}"
+          - "CAM2: NIC={{ cam2_nic }} HOST={{ cam2_host_ip_cidr }} CAM_IP={{ cam2_camera_ip }} SERIAL={{ cam2_serial | default('<unknown>') }}"
+          - "CAM3: NIC={{ cam3_nic }} HOST={{ cam3_host_ip_cidr }} CAM_IP={{ cam3_camera_ip }} SERIAL={{ cam3_serial | default('<unknown>') }}"
+          - "Ping results: {{ ping_result.results | map(attribute='rc') | list }}"

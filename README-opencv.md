@@ -5,6 +5,11 @@
 * `setup.sh`: OpenCV を GStreamer + GTK 対応でビルドし、`.venv` にインストールするセットアップスクリプト
 * `viewer.py`: GStreamer (`tcamsrc`) 経由で GigE カメラを OpenCV から開いて `imshow` するビューワ
 
+## パイプライン概要
+
+このREADMEでは、`tcamsrc` を含む GStreamer パイプラインを OpenCV の `cv2.VideoCapture(..., cv2.CAP_GSTREAMER)` に渡して映像を取得します。  
+パイプラインは `tcamsrc -> video/x-bayer -> bayer2rgb -> videoconvert -> video/x-raw(BGR) -> appsink(OpenCV)` の順です。
+
 対象環境の想定:
 
 * Ubuntu 22.04
