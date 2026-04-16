@@ -8,6 +8,8 @@ SRC_DIR="$PROJECT_DIR/opencv-python"
 BACKUP_SRC_DIR="$PROJECT_DIR/opencv-python-src"
 WITH_OPENCV_BUILD=1
 SYSTEM_PYTHON="/usr/bin/python3"
+NUMPY_SPEC="numpy<2"
+OPENCV_CONTRIB_SPEC="opencv-contrib-python<4.13"
 
 if [[ -x "$SYSTEM_PYTHON" ]]; then
     PYTHON_BIN="$SYSTEM_PYTHON"
@@ -20,7 +22,7 @@ usage() {
 Usage: $(basename "$0") [--with-opencv-build] [-h|--help]
 
 Default:
-  Install dependencies for continue_calib-gige.py without building OpenCV from source.
+  Build OpenCV from source with GStreamer + GTK enabled.
 
 Options:
   --with-opencv-build   Build opencv-python wheel with GStreamer + GTK enabled
@@ -64,7 +66,7 @@ echo "Using python: $PYTHON_BIN"
 source "$VENV_DIR/bin/activate"
 
 echo "[3/5] Install Python packages"
-pip install --upgrade pip wheel setuptools numpy opencv-contrib-python
+pip install --upgrade pip wheel setuptools "$NUMPY_SPEC" "$OPENCV_CONTRIB_SPEC"
 
 if [[ "$WITH_OPENCV_BUILD" -eq 1 ]]; then
     echo "[4/5] Prepare opencv-python source"
@@ -77,12 +79,18 @@ if [[ "$WITH_OPENCV_BUILD" -eq 1 ]]; then
     cd "$SRC_DIR"
 
     echo "[5/5] Build wheel with GStreamer + GTK"
+    export ENABLE_CONTRIB=1
     export CMAKE_ARGS="-DWITH_GSTREAMER=ON -DWITH_GTK=ON"
     python -m pip wheel . --verbose
 
     echo "[5/5] Install built wheel into venv"
     ls -1 ./*.whl
-    pip install --force-reinstall ./opencv_python-*.whl
+    if ls -1 ./opencv_contrib_python-*.whl >/dev/null 2>&1; then
+        pip install --force-reinstall ./opencv_contrib_python-*.whl
+    else
+        pip install --force-reinstall ./opencv_python-*.whl
+    fi
+    pip install --force-reinstall "$NUMPY_SPEC"
 
     echo "[5/5] Move source tree aside"
     cd "$PROJECT_DIR"
