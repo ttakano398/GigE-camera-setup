@@ -37,3 +37,5 @@ pip-wheel-metadata/
 *.swp
 *.swo
 *~
+
+try.sh

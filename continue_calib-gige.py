@@ -319,10 +319,12 @@ class GigECameraController:
 
     def describe_pipeline(self) -> str:
         mode = self.state.mode
+        props = build_tcam_property_summary(self.state)
         return (
-            f'tcamsrc serial="{self.state.serial}" type="aravis" ! '
+            f'tcammainsrc name=source serial="{self.state.serial}" tcam-properties="{props}" ! '
             f"video/x-bayer,format=grbg,width={mode.width},height={mode.height},framerate={mode.fps}/1 ! "
-            "bayer2rgb ! videoconvert ! video/x-raw,format=BGR ! appsink sync=false drop=true max-buffers=1"
+            "bayer2rgb ! videoconvert ! video/x-raw,format=BGR ! "
+            "appsink name=sink sync=false drop=true max-buffers=1 emit-signals=false"
         )
 
     def _make_element(self, factory: str, name: str):
@@ -345,39 +347,22 @@ class GigECameraController:
             )
 
     def _create_pipeline(self) -> None:
-        mode = self.state.mode
-        pipeline = Gst.Pipeline.new("gige-calibration-pipeline")
+        desc = self.describe_pipeline()
+        try:
+            pipeline = Gst.parse_launch(desc)
+        except GLib.Error as exc:
+            raise RuntimeError(f"failed to parse GStreamer pipeline: {exc}")
+
         if pipeline is None:
             raise RuntimeError("failed to create GStreamer pipeline")
 
-        source = self._make_element("tcamsrc", "source")
-        bayer_caps = self._make_element("capsfilter", "bayer_caps")
-        debayer = self._make_element("bayer2rgb", "debayer")
-        convert = self._make_element("videoconvert", "convert")
-        bgr_caps = self._make_element("capsfilter", "bgr_caps")
-        appsink = self._make_element("appsink", "sink")
+        source = pipeline.get_by_name("source")
+        appsink = pipeline.get_by_name("sink")
 
-        source.set_property("serial", self.state.serial)
-        source.set_property("type", "aravis")
-
-        bayer_caps.set_property(
-            "caps",
-            Gst.Caps.from_string(
-                f"video/x-bayer,format=grbg,width={mode.width},height={mode.height},framerate={mode.fps}/1"
-            ),
-        )
-        bgr_caps.set_property("caps", Gst.Caps.from_string("video/x-raw,format=BGR"))
-
-        appsink.set_property("sync", False)
-        appsink.set_property("drop", True)
-        appsink.set_property("max-buffers", 1)
-        appsink.set_property("emit-signals", False)
-
-        for element in (source, bayer_caps, debayer, convert, bgr_caps, appsink):
-            pipeline.add(element)
-
-        if not Gst.Element.link_many(source, bayer_caps, debayer, convert, bgr_caps, appsink):
-            raise RuntimeError("failed to link GStreamer pipeline")
+        if source is None:
+            raise RuntimeError("failed to get source element")
+        if appsink is None:
+            raise RuntimeError("failed to get appsink element")
 
         self.pipeline = pipeline
         self.source = source
