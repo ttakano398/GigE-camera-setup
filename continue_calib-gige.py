@@ -738,7 +738,7 @@ def parse_args() -> argparse.Namespace:
         description="Live auto-calibration for TIS GigE cameras via tcamsrc + Gst appsink."
     )
     parser.add_argument("--serial", default=DEFAULT_SERIAL)
-    parser.add_argument("--mode", choices=["max", "fhd"], default="fhd")
+    parser.add_argument("--mode", choices=["max", "fhd"], default="max")
     parser.add_argument("--marker", choices=["aruco", "apriltag"], default="aruco")
     parser.add_argument("--fisheye", action="store_true", help="Apply fisheye correction before calibration/visualization")
     return parser.parse_args()
