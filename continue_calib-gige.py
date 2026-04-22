@@ -3,6 +3,7 @@ import logging
 import sys
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Deque, Optional
 
 import cv2
@@ -23,6 +24,9 @@ logging.basicConfig(
 
 DEFAULT_SERIAL = "08520932"
 WINDOW_NAME = "Calibration"
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_RECTIFY_CALIB_PATH = SCRIPT_DIR / "camera_rectify" / "camera_calib.yaml"
+DEFAULT_RECTIFY_ALPHA = 0.0
 
 TARGET_BRIGHTNESS = 119
 THRESHOLD = 5
@@ -134,6 +138,100 @@ class FisheyeCorrector:
             self.current_config = config
         corrected = cv2.remap(frame, self.map_x, self.map_y, interpolation=cv2.INTER_LINEAR)
         return self._apply_output_zoom(corrected)
+
+
+class RectifyCorrector:
+    def __init__(self, calib_path: Path, alpha: float = DEFAULT_RECTIFY_ALPHA):
+        self.calib_path = Path(calib_path)
+        self.alpha = float(alpha)
+        if not 0.0 <= self.alpha <= 1.0:
+            raise ValueError("--rectify-alpha must be between 0 and 1")
+        self.K, self.dist, self.calib_size = self._load_calib_yaml(self.calib_path)
+        self.map1 = None
+        self.map2 = None
+        self.current_config = None
+        self.warned_size_mismatch = False
+
+    def _load_calib_yaml(self, yaml_path: Path):
+        fs = cv2.FileStorage(str(yaml_path), cv2.FILE_STORAGE_READ)
+        if not fs.isOpened():
+            raise RuntimeError(f"Failed to open calib yaml: {yaml_path}")
+
+        try:
+            k_node = fs.getNode("K")
+            dist_node = fs.getNode("dist")
+            width_node = fs.getNode("image_width")
+            height_node = fs.getNode("image_height")
+
+            if k_node.empty() or dist_node.empty():
+                raise RuntimeError("Invalid calib yaml: 'K' or 'dist' not found.")
+
+            K = np.array(k_node.mat(), dtype=np.float64)
+            dist = np.array(dist_node.mat(), dtype=np.float64).reshape(-1, 1)
+            calib_w = int(width_node.real()) if not width_node.empty() else None
+            calib_h = int(height_node.real()) if not height_node.empty() else None
+            return K, dist, (calib_w, calib_h)
+        finally:
+            fs.release()
+
+    def _scaled_camera_matrix(self, width: int, height: int) -> np.ndarray:
+        calib_w, calib_h = self.calib_size
+        if calib_w is None or calib_h is None or (calib_w, calib_h) == (width, height):
+            return self.K
+
+        if not self.warned_size_mismatch:
+            logging.warning(
+                "rectify calib size and frame size differ: calib=%sx%s frame=%dx%d; scaling K",
+                calib_w,
+                calib_h,
+                width,
+                height,
+            )
+            self.warned_size_mismatch = True
+
+        sx = width / float(calib_w)
+        sy = height / float(calib_h)
+        K = self.K.copy()
+        K[0, 0] *= sx
+        K[0, 2] *= sx
+        K[1, 1] *= sy
+        K[1, 2] *= sy
+        return K
+
+    def _calculate_maps(self, width: int, height: int):
+        K = self._scaled_camera_matrix(width, height)
+        new_K, _ = cv2.getOptimalNewCameraMatrix(
+            K,
+            self.dist,
+            (width, height),
+            self.alpha,
+            (width, height),
+        )
+        return cv2.initUndistortRectifyMap(
+            K,
+            self.dist,
+            R=None,
+            newCameraMatrix=new_K,
+            size=(width, height),
+            m1type=cv2.CV_16SC2,
+        )
+
+    def apply(self, frame: np.ndarray) -> np.ndarray:
+        if frame is None:
+            return frame
+        h, w = frame.shape[:2]
+        config = (w, h, self.alpha)
+        if self.map1 is None or self.map2 is None or self.current_config != config:
+            self.map1, self.map2 = self._calculate_maps(w, h)
+            self.current_config = config
+            logging.info("rectify maps built for frame size: %dx%d", w, h)
+        return cv2.remap(
+            frame,
+            self.map1,
+            self.map2,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
 
 
 def create_bgr_history() -> Deque[np.ndarray]:
@@ -740,7 +838,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--serial", default=DEFAULT_SERIAL)
     parser.add_argument("--mode", choices=["max", "fhd"], default="max")
     parser.add_argument("--marker", choices=["aruco", "apriltag"], default="aruco")
-    parser.add_argument("--fisheye", action="store_true", help="Apply fisheye correction before calibration/visualization")
+    correction_group = parser.add_mutually_exclusive_group()
+    correction_group.add_argument("--fisheye", action="store_true", help="Apply fisheye correction before calibration/visualization")
+    correction_group.add_argument("--rectify", action="store_true", help="Apply calibration YAML rectification before calibration/visualization")
+    parser.add_argument("--rectify-calib", type=Path, default=DEFAULT_RECTIFY_CALIB_PATH, help=f"Path to camera calibration YAML (default: {DEFAULT_RECTIFY_CALIB_PATH})")
+    parser.add_argument("--rectify-alpha", type=float, default=DEFAULT_RECTIFY_ALPHA, help="Alpha for getOptimalNewCameraMatrix in [0, 1]. 0 crops more, 1 preserves more FoV.")
     return parser.parse_args()
 
 
@@ -754,6 +856,7 @@ def main() -> None:
     controller = GigECameraController(state)
     engine = CalibrationEngine(args.marker)
     fisheye_corrector = FisheyeCorrector() if args.fisheye else None
+    rectify_corrector = RectifyCorrector(args.rectify_calib, args.rectify_alpha) if args.rectify else None
     if fisheye_corrector is not None:
         logging.info(
             "fisheye enabled: f_scale=%.2f zoom=%.1f output_zoom=%.1f resolution_scale=%.1f",
@@ -761,6 +864,13 @@ def main() -> None:
             FISHEYE_DEFAULT_ZOOM,
             FISHEYE_DEFAULT_OUTPUT_ZOOM,
             FISHEYE_DEFAULT_RESOLUTION_SCALE,
+        )
+    if rectify_corrector is not None:
+        logging.info(
+            "rectify enabled: calib=%s alpha=%.2f calib_size=%s",
+            rectify_corrector.calib_path,
+            rectify_corrector.alpha,
+            rectify_corrector.calib_size,
         )
 
     print("python exe :", sys.executable)
@@ -801,6 +911,8 @@ def main() -> None:
                 continue
             if fisheye_corrector is not None:
                 frame = fisheye_corrector.apply(frame)
+            if rectify_corrector is not None:
+                frame = rectify_corrector.apply(frame)
 
             if full_width is None or full_height is None:
                 full_height, full_width = frame.shape[:2]
