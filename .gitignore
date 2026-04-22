@@ -39,3 +39,5 @@ pip-wheel-metadata/
 *~
 
 try.sh
+
+camera_rectify/capture/
