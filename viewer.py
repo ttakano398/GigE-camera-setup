@@ -231,7 +231,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=["max", "fhd"],
-        default="fhd",
+        default="max",
         help="Capture mode to preview",
     )
     correction_group = parser.add_mutually_exclusive_group()
