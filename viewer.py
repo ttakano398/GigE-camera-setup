@@ -43,7 +43,32 @@ def parse_args() -> argparse.Namespace:
         default="fhd",
         help="Capture mode to preview",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--display-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor applied only to the displayed image. Capture is saved at original resolution.",
+    )
+    parser.add_argument(
+        "--window-width",
+        type=int,
+        default=None,
+        help="Initial window width in pixels.",
+    )
+    parser.add_argument(
+        "--window-height",
+        type=int,
+        default=None,
+        help="Initial window height in pixels.",
+    )
+    args = parser.parse_args()
+
+    if args.display_scale <= 0:
+        parser.error("--display-scale must be > 0")
+    if (args.window_width is None) != (args.window_height is None):
+        parser.error("--window-width and --window-height must be specified together")
+
+    return args
 
 
 def save_capture(frame) -> Path:
@@ -56,6 +81,15 @@ def save_capture(frame) -> Path:
     return save_path
 
 
+def resize_for_display(frame, display_scale: float):
+    if display_scale == 1.0:
+        return frame
+    h, w = frame.shape[:2]
+    disp_w = max(1, int(round(w * display_scale)))
+    disp_h = max(1, int(round(h * display_scale)))
+    return cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
+
+
 def main() -> None:
     args = parse_args()
     pipeline = make_pipeline(args.serial, args.mode)
@@ -65,9 +99,16 @@ def main() -> None:
     print("capture_dir:", CAPTURE_DIR)
     print("pipeline:", pipeline)
     print("opened:", cap.isOpened())
+    print("display_scale:", args.display_scale)
+    if args.window_width is not None and args.window_height is not None:
+        print("window_size:", f"{args.window_width}x{args.window_height}")
 
     if not cap.isOpened():
         raise RuntimeError("failed to open camera via GStreamer/tcamsrc")
+
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    if args.window_width is not None and args.window_height is not None:
+        cv2.resizeWindow(WINDOW_NAME, args.window_width, args.window_height)
 
     try:
         while True:
@@ -75,7 +116,8 @@ def main() -> None:
             if not ok:
                 continue
 
-            cv2.imshow(WINDOW_NAME, frame)
+            display_frame = resize_for_display(frame, args.display_scale)
+            cv2.imshow(WINDOW_NAME, display_frame)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord("c"):
