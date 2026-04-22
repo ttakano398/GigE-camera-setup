@@ -12,6 +12,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SCRIPT_DIR / "camera_rectify" / "capture"
 DEFAULT_RECTIFY_CALIB_PATH = SCRIPT_DIR / "camera_rectify" / "camera_calib.yaml"
 DEFAULT_RECTIFY_ALPHA = 0.0
+DEFAULT_WINDOW_WIDTH = 1920
+DEFAULT_WINDOW_HEIGHT = 1080
 
 FISHEYE_DEFAULT_F_SCALE = 0.13
 FISHEYE_DEFAULT_ZOOM = 2.8
@@ -76,7 +78,7 @@ class FisheyeCorrector:
 
         dx = xx - cx
         dy = yy - cy
-        radius = np.sqrt(dx ** 2 + dy ** 2)
+        radius = np.sqrt(dx**2 + dy**2)
 
         focal = self.f_scale * min(width, height)
         theta = np.arctan2(radius, focal)
@@ -97,16 +99,18 @@ class FisheyeCorrector:
             crop_h = max(1, int(round(h / self.output_zoom)))
             x0 = max(0, (w - crop_w) // 2)
             y0 = max(0, (h - crop_h) // 2)
-            cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
+            cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
             return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
 
         resized_w = max(1, int(round(w * self.output_zoom)))
         resized_h = max(1, int(round(h * self.output_zoom)))
-        resized = cv2.resize(frame, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR)
+        resized = cv2.resize(
+            frame, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR
+        )
         output = np.zeros_like(frame)
         x0 = (w - resized_w) // 2
         y0 = (h - resized_h) // 2
-        output[y0:y0 + resized_h, x0:x0 + resized_w] = resized
+        output[y0 : y0 + resized_h, x0 : x0 + resized_w] = resized
         return output
 
     def apply(self, frame):
@@ -118,7 +122,9 @@ class FisheyeCorrector:
             self.map_x, self.map_y = self._calculate_maps(w, h)
             self.current_config = config
             print(f"built fisheye maps for frame size: {w}x{h}")
-        corrected = cv2.remap(frame, self.map_x, self.map_y, interpolation=cv2.INTER_LINEAR)
+        corrected = cv2.remap(
+            frame, self.map_x, self.map_y, interpolation=cv2.INTER_LINEAR
+        )
         return self._apply_output_zoom(corrected)
 
 
@@ -285,13 +291,13 @@ def parse_args() -> argparse.Namespace:
         "--window-width",
         type=int,
         default=None,
-        help="Initial window width in pixels.",
+        help=f"Initial window width in pixels (default: {DEFAULT_WINDOW_WIDTH}).",
     )
     parser.add_argument(
         "--window-height",
         type=int,
         default=None,
-        help="Initial window height in pixels.",
+        help=f"Initial window height in pixels (default: {DEFAULT_WINDOW_HEIGHT}).",
     )
     args = parser.parse_args()
 
@@ -330,6 +336,15 @@ def resize_for_display(frame, display_scale: float):
     disp_w = max(1, int(round(w * display_scale)))
     disp_h = max(1, int(round(h * display_scale)))
     return cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
+
+
+def create_preview_window(width: int, height: int) -> None:
+    flags = cv2.WINDOW_NORMAL
+    if hasattr(cv2, "WINDOW_KEEPRATIO"):
+        flags |= cv2.WINDOW_KEEPRATIO
+
+    cv2.namedWindow(WINDOW_NAME, flags)
+    cv2.resizeWindow(WINDOW_NAME, width, height)
 
 
 def make_video_writer(frame_shape, fps: float):
@@ -389,15 +404,14 @@ def main() -> None:
     if args.rectify:
         print("rectify_calib:", args.rectify_calib)
         print("rectify_alpha:", args.rectify_alpha)
-    if args.window_width is not None and args.window_height is not None:
-        print("window_size:", f"{args.window_width}x{args.window_height}")
+    window_width = args.window_width or DEFAULT_WINDOW_WIDTH
+    window_height = args.window_height or DEFAULT_WINDOW_HEIGHT
+    print("window_size:", f"{window_width}x{window_height}")
 
     if not cap.isOpened():
         raise RuntimeError("failed to open camera via GStreamer/tcamsrc")
 
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    if args.window_width is not None and args.window_height is not None:
-        cv2.resizeWindow(WINDOW_NAME, args.window_width, args.window_height)
+    create_preview_window(window_width, window_height)
 
     writer = None
     recording = False
