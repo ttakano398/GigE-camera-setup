@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -35,9 +37,10 @@ from viewer import (  # noqa: E402
 
 
 WINDOW_NAME = "GigE QR Viewer"
-SELECT_WINDOW_NAME = "Select QR Algorithm"
+SELECT_WINDOW_NAME = "GigE QR Startup"
 CAPTURE_DIR = SCRIPT_DIR / "capture"
 DEFAULT_WECHAT_MODEL_DIR = SCRIPT_DIR / "opencv_3rdparty"
+KNOWN_CAMERA_SERIALS = (DEFAULT_SERIAL, "05620902", "05620909", "05620901")
 
 DETECTOR_ORDER = ("opencv", "wechat", "pyzbar", "qreader")
 ALGORITHM_LABELS = {
@@ -235,8 +238,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--serial",
-        default=DEFAULT_SERIAL,
-        help=f"Camera serial number (default: {DEFAULT_SERIAL})",
+        default=None,
+        help=(
+            "Camera serial number. If omitted, the startup selector lets you choose "
+            f"one (default candidate: {DEFAULT_SERIAL})."
+        ),
     )
     parser.add_argument(
         "--mode",
@@ -537,8 +543,6 @@ def select_algorithm_with_buttons(statuses: dict[str, AlgorithmStatus]) -> str:
                 index = key - ord("1")
                 if index < len(buttons) and buttons[index].enabled:
                     selected_key = buttons[index].key
-            if cv2.getWindowProperty(SELECT_WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
-                raise KeyboardInterrupt("algorithm selection window closed")
     finally:
         try:
             cv2.destroyWindow(SELECT_WINDOW_NAME)
@@ -546,6 +550,289 @@ def select_algorithm_with_buttons(statuses: dict[str, AlgorithmStatus]) -> str:
             pass
 
     return selected_key
+
+
+def unique_preserve_order(values: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    unique_values: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            unique_values.append(value)
+    return unique_values
+
+
+def discover_camera_serials() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["tcam-gigetool", "list", "--format", "s"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    serials = re.findall(r"\b\d{6,}\b", result.stdout)
+    return unique_preserve_order(serials)
+
+
+def make_startup_buttons(
+    statuses: dict[str, AlgorithmStatus],
+    serials: list[str],
+) -> tuple[list[ButtonSpec], list[ButtonSpec]]:
+    serial_buttons: list[ButtonSpec] = []
+    for index, serial in enumerate(serials[:8]):
+        y = 124 + index * 54
+        serial_buttons.append(
+            ButtonSpec(
+                serial,
+                serial,
+                (48, y, 280, 44),
+                True,
+            )
+        )
+
+    algorithm_specs = [
+        ("opencv", 392, 124),
+        ("wechat", 392, 178),
+        ("pyzbar", 392, 232),
+        ("qreader", 392, 286),
+        ("all", 392, 340),
+    ]
+    algorithm_buttons = []
+    for key, x, y in algorithm_specs:
+        if key == "all":
+            enabled = any(statuses[detector_key].available for detector_key in DETECTOR_ORDER)
+            reason = "no available algorithms"
+        else:
+            enabled = statuses[key].available
+            reason = statuses[key].reason
+        algorithm_buttons.append(
+            ButtonSpec(
+                key,
+                ALGORITHM_LABELS[key],
+                (x, y, 280, 44),
+                enabled,
+                reason,
+            )
+        )
+
+    return serial_buttons, algorithm_buttons
+
+
+def draw_startup_selector(
+    serial_buttons: list[ButtonSpec],
+    algorithm_buttons: list[ButtonSpec],
+    selected_serial: str | None,
+    selected_algorithm: str | None,
+) -> np.ndarray:
+    canvas = np.full((600, 720, 3), (28, 30, 34), dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        "GigE QR Viewer",
+        (48, 52),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (245, 245, 245),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Select camera serial and QR algorithm. Enter starts.",
+        (48, 84),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (190, 195, 200),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Camera serial",
+        (48, 112),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (220, 225, 230),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "QR algorithm",
+        (392, 112),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (220, 225, 230),
+        1,
+        cv2.LINE_AA,
+    )
+
+    def draw_button(button: ButtonSpec, selected: bool, shortcut: str):
+        x, y, w, h = button.rect
+        if button.enabled:
+            fill = (64, 86, 118)
+            border = (120, 185, 255)
+            text_color = (255, 255, 255)
+        else:
+            fill = (56, 56, 60)
+            border = (85, 85, 90)
+            text_color = (145, 145, 150)
+
+        if selected:
+            fill = (78, 110, 150)
+            border = (0, 220, 255)
+
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), fill, -1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), border, 2, cv2.LINE_AA)
+        cv2.putText(
+            canvas,
+            f"{shortcut}. {button.label}",
+            (x + 14, y + 29),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            text_color,
+            2,
+            cv2.LINE_AA,
+        )
+        if not button.enabled and button.reason:
+            cv2.putText(
+                canvas,
+                button.reason[:34],
+                (x + 14, y + 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.34,
+                (122, 126, 132),
+                1,
+                cv2.LINE_AA,
+            )
+
+    for index, button in enumerate(serial_buttons, start=1):
+        draw_button(button, button.key == selected_serial, str(index))
+
+    shortcut_keys = ["A", "S", "D", "F", "G"]
+    for shortcut, button in zip(shortcut_keys, algorithm_buttons):
+        draw_button(button, button.key == selected_algorithm, shortcut)
+
+    if selected_serial and selected_algorithm:
+        cv2.putText(
+            canvas,
+            "Starting...",
+            (48, 580),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 220, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    else:
+        cv2.putText(
+            canvas,
+            "Esc/q cancels.",
+            (48, 580),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (170, 175, 180),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return canvas
+
+
+def select_startup_options(
+    statuses: dict[str, AlgorithmStatus],
+    requested_serial: str | None,
+    requested_algorithm: str,
+) -> tuple[str, str]:
+    discovered_serials = discover_camera_serials()
+    serials = unique_preserve_order(
+        discovered_serials + list(KNOWN_CAMERA_SERIALS)
+    )
+    if requested_serial:
+        serials = unique_preserve_order([requested_serial] + serials)
+
+    serial_buttons, algorithm_buttons = make_startup_buttons(statuses, serials)
+    selected_serial = requested_serial
+    selected_algorithm = None if requested_algorithm == "select" else requested_algorithm
+
+    if selected_serial and selected_algorithm:
+        return selected_serial, selected_algorithm
+
+    def on_mouse(event, x, y, _flags, _userdata):
+        nonlocal selected_serial, selected_algorithm
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        for button in serial_buttons:
+            bx, by, bw, bh = button.rect
+            if bx <= x <= bx + bw and by <= y <= by + bh:
+                selected_serial = button.key
+                return
+        for button in algorithm_buttons:
+            bx, by, bw, bh = button.rect
+            if button.enabled and bx <= x <= bx + bw and by <= y <= by + bh:
+                selected_algorithm = button.key
+                return
+
+    cv2.namedWindow(SELECT_WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(SELECT_WINDOW_NAME, 720, 600)
+    cv2.setMouseCallback(SELECT_WINDOW_NAME, on_mouse)
+
+    try:
+        while True:
+            cv2.imshow(
+                SELECT_WINDOW_NAME,
+                draw_startup_selector(
+                    serial_buttons,
+                    algorithm_buttons,
+                    selected_serial,
+                    selected_algorithm,
+                ),
+            )
+            key = cv2.waitKey(50) & 0xFF
+            if key in (27, ord("q")):
+                raise KeyboardInterrupt("startup selection cancelled")
+
+            if ord("1") <= key <= ord("8"):
+                index = key - ord("1")
+                if index < len(serial_buttons):
+                    selected_serial = serial_buttons[index].key
+
+            algorithm_shortcuts = {
+                ord("a"): "opencv",
+                ord("A"): "opencv",
+                ord("s"): "wechat",
+                ord("S"): "wechat",
+                ord("d"): "pyzbar",
+                ord("D"): "pyzbar",
+                ord("f"): "qreader",
+                ord("F"): "qreader",
+                ord("g"): "all",
+                ord("G"): "all",
+            }
+            if key in algorithm_shortcuts:
+                candidate = algorithm_shortcuts[key]
+                for button in algorithm_buttons:
+                    if button.key == candidate and button.enabled:
+                        selected_algorithm = candidate
+                        break
+
+            if key in (10, 13) and selected_serial and selected_algorithm:
+                break
+            if selected_serial and selected_algorithm:
+                break
+    finally:
+        try:
+            cv2.destroyWindow(SELECT_WINDOW_NAME)
+        except cv2.error:
+            pass
+
+    return selected_serial, selected_algorithm
 
 
 def resolve_algorithm_keys(
@@ -728,26 +1015,27 @@ def main() -> None:
     statuses = check_algorithm_statuses(args.wechat_model_dir)
 
     try:
-        selected_algorithm = (
-            select_algorithm_with_buttons(statuses)
-            if args.algorithm == "select"
-            else args.algorithm
+        selected_serial, selected_algorithm = select_startup_options(
+            statuses,
+            args.serial,
+            args.algorithm,
         )
     except KeyboardInterrupt:
-        print("algorithm selection cancelled")
+        print("startup selection cancelled")
         return
 
     detector_keys = resolve_algorithm_keys(selected_algorithm, statuses)
     detectors = [build_detector(key, args) for key in detector_keys]
     corrector = build_corrector(args)
 
-    pipeline = make_pipeline(args.serial, args.mode)
+    pipeline = make_pipeline(selected_serial, args.mode)
     cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
     print("script_dir:", SCRIPT_DIR)
     print("capture_dir:", CAPTURE_DIR)
     print("pipeline:", pipeline)
     print("opened:", cap.isOpened())
+    print("selected_serial:", selected_serial)
     print("selected_algorithm:", selected_algorithm)
     print("detectors:", ", ".join(detector.label for detector in detectors))
     print("qr_interval:", args.qr_interval)

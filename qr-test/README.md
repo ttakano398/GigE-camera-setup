@@ -33,13 +33,21 @@ source .venv/bin/activate
 python qr-test/viewer_qr.py --serial 08520932 --mode fhd
 ```
 
-起動時にアルゴリズム選択ウィンドウが表示されます。キーボードでも `1` から `5` で選択できます。
+`--serial` を省略すると、起動時に camera serial と QR アルゴリズムの選択ウィンドウが表示されます。
+serial は `tcam-gigetool list --format s` で見つかったものを優先し、見つからない場合は既知の serial 候補を表示します。
 
 選択を固定したい場合:
 
 ```bash
 python qr-test/viewer_qr.py --algorithm opencv --serial 08520932 --mode fhd
 ```
+
+起動画面のキー操作:
+
+- serial: `1` から `8`
+- algorithm: `A` OpenCV, `S` WeChat, `D` pyzbar, `F` QReader, `G` all
+- `Enter`: 開始
+- `q` / `Esc`: キャンセル
 
 補正付きで使う場合:
 

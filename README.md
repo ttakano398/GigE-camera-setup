@@ -103,7 +103,7 @@ source .venv/bin/activate
 python qr-test/viewer_qr.py --serial 08520932 --mode fhd
 ```
 
-起動時に QR アルゴリズム選択ウィンドウが出ます。選択を固定したい場合:
+起動時に camera serial と QR アルゴリズムの選択ウィンドウが出ます。選択を固定したい場合:
 
 ```bash
 python qr-test/viewer_qr.py --algorithm opencv --serial 08520932 --mode fhd
