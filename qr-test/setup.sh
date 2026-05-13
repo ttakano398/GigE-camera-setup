@@ -5,6 +5,11 @@ set -euo pipefail
 # Purpose:
 #   Setup Python environment for this QR-code repository.
 #
+# Note:
+#   This is the legacy standalone setup for scripts under opencv-obs/.
+#   For GigE viewer_qr.py, use setup_qr.sh so the root .venv and its
+#   GStreamer-enabled OpenCV build are preserved.
+#
 # Usage:
 #   bash setup.sh
 #

@@ -4,6 +4,8 @@
 
 - `setup.sh`: `.venv` を再作成し、本命 `continue_calib-gige.py` 向け依存を入れるセットアップスクリプト（`--with-opencv-build` 指定時のみ OpenCV を GStreamer + GTK 付きでビルド）
 - `viewer.py`: 接続確認用の簡易ビューワ
+- `qr-test/viewer_qr.py`: GigE 映像に QR 認識結果を重ねて表示するビューワ
+- `qr-test/setup_qr.sh`: 既存 `.venv` に QR 用 Python パッケージだけを追加するスクリプト
 - `continue_calib-gige.py`: `tcamsrc` + `TcamPropertyProvider` で live 更新しながら自動キャリブレーションする本命ツール
 - `*-opencv*`: A 方針の参考実装
 
@@ -56,6 +58,8 @@ tcam-ctrl -p 08520932
 
 ## 4. セットアップ
 
+まず GigE カメラ用の基本環境を作ります。`viewer.py` / `viewer_qr.py` は OpenCV の GStreamer backend が必要なので、通常は OpenCV ビルド込みでセットアップしてください。
+
 ```bash
 chmod +x setup.sh
 ./setup.sh
@@ -74,7 +78,7 @@ ansible-playbook ansible-gige-setup.yml -K
 
 `setup.sh` は `.venv` を `--system-site-packages` 付きで作るため、`python3-gi` / `python3-gst-1.0` を venv からも参照できます。
 
-`viewer.py` も使う場合は OpenCV をビルドしてください:
+`viewer.py` / `qr-test/viewer_qr.py` を使う場合は OpenCV をビルドしてください:
 
 ```bash
 ./setup.sh --with-opencv-build
@@ -89,7 +93,25 @@ python viewer.py --serial 08520932 --mode fhd
 
 - `q` または `Esc` で終了
 
-## 6. 自動キャリブレーション
+## 6. QR ビューワ
+
+QR 認識も使う場合は、ルートの `setup.sh` で作った既存 `.venv` に追加パッケージを入れます。`qr-test/setup_qr.sh` は OpenCV を入れ直さないため、GStreamer 有効版の `cv2` を維持します。
+
+```bash
+./qr-test/setup_qr.sh
+source .venv/bin/activate
+python qr-test/viewer_qr.py --serial 08520932 --mode fhd
+```
+
+起動時に QR アルゴリズム選択ウィンドウが出ます。選択を固定したい場合:
+
+```bash
+python qr-test/viewer_qr.py --algorithm opencv --serial 08520932 --mode fhd
+```
+
+詳細は `qr-test/README.md` を参照してください。
+
+## 7. 自動キャリブレーション
 
 ```bash
 source .venv/bin/activate
@@ -116,14 +138,15 @@ python continue_calib-gige.py --serial 08520932 --mode fhd --marker aruco
 - `BalanceWhiteGreen = 1.0`
 - `BalanceWhiteBlue = 1.55`
 
-## 7. 典型的な確認フロー
+## 8. 典型的な確認フロー
 
 1. `tcam-gigetool list` でカメラが見えることを確認する
 2. `viewer.py` で映像が出ることを確認する
-3. `continue_calib-gige.py` を起動する
-4. `c` で自動キャリブレーションを開始する
+3. QR が必要な場合は `qr-test/setup_qr.sh` を実行し、`qr-test/viewer_qr.py` を起動する
+4. `continue_calib-gige.py` を起動する
+5. `c` で自動キャリブレーションを開始する
 
-## 8. トラブルシュート
+## 9. トラブルシュート
 
 ### `failed to open camera via GStreamer/tcamsrc`
 
@@ -150,3 +173,9 @@ PY
 
 `continue_calib-gige.py` では GUI backend が必要です。  
 `viewer.py` では `GStreamer: YES` も必要です（必要なら `./setup.sh --with-opencv-build` を実行）。
+
+### QR セットアップ後に GigE viewer が開けない
+
+- `qr-test/setup_qr.sh` を使い、`pip install opencv-python` / `pip install opencv-contrib-python` を直接実行しない
+- `python -c "import cv2; print(cv2.getBuildInformation())"` で `GStreamer: YES` が残っているか確認
+- OpenCV が上書きされた場合は、ルートで `./setup.sh --with-opencv-build` を再実行してから `./qr-test/setup_qr.sh` を実行する
