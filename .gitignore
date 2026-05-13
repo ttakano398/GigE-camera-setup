@@ -1,4 +1,4 @@
-# Python bytecode and caches
+# Python caches
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,14 +31,31 @@ pip-wheel-metadata/
 /opencv-python/
 /opencv-python-src/
 
+# Local config/secrets
+.env
+*.env.local
+
+# Camera captures and generated media
+camera_rectify/capture/
+qr-test/capture/
+qr-test/opencv-obs/sample/
+*.mp4
+*.avi
+*.mov
+
+# Downloaded model assets
+qr-test/opencv_3rdparty/*
+!qr-test/opencv_3rdparty/.gitkeep
+
 # Editor and OS noise
 .DS_Store
+.DS_Store?
+._*
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
+# Local scratch
 try.sh
-
-camera_rectify/capture/

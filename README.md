@@ -99,6 +99,7 @@ QR 認識も使う場合は、ルートの `setup.sh` で作った既存 `.venv`
 
 ```bash
 ./qr-test/setup_qr.sh
+./qr-test/install_opencv_3rdparty.sh  # WeChat QRCode を使う場合のみ
 source .venv/bin/activate
 python qr-test/viewer_qr.py --serial 08520932 --mode fhd
 ```

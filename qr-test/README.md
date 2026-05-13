@@ -6,6 +6,7 @@
 
 - `viewer_qr.py`: GigE QR 認識ビューワ
 - `setup_qr.sh`: ルート `setup.sh` で作成済みの `.venv` に QR 依存だけを追加するスクリプト
+- `install_opencv_3rdparty.sh`: WeChat QRCode 用モデルファイルを `opencv_3rdparty/` にダウンロードするスクリプト
 - `opencv-obs/`: OpenCV 標準カメラや動画ファイルで試していた元の QR 実験スクリプト
 - `setup.sh`: 旧 QR 実験用の standalone セットアップ。GigE の `viewer_qr.py` 用には通常使いません
 
@@ -85,6 +86,12 @@ QReader/YOLO 系が不要な場合は軽量セットアップにできます。
 - `detect.caffemodel`
 - `sr.prototxt`
 - `sr.caffemodel`
+
+取得用スクリプト:
+
+```bash
+./qr-test/install_opencv_3rdparty.sh
+```
 
 ファイルがない場合、起動時の選択画面では WeChat QRCode が無効になります。
 
