@@ -5,6 +5,7 @@ import importlib.util
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +44,9 @@ DEFAULT_WECHAT_MODEL_DIR = SCRIPT_DIR / "opencv_3rdparty"
 KNOWN_CAMERA_SERIALS = (DEFAULT_SERIAL, "05620902", "05620909", "05620901")
 
 DETECTOR_ORDER = ("opencv", "wechat", "pyzbar", "qreader")
+PIPELINE_ORDER = ("opencv", "pyzbar", "wechat")
 ALGORITHM_LABELS = {
+    "pipeline": "Pipeline OCV>Pyz>WC",
     "opencv": "OpenCV QRCode",
     "wechat": "WeChat QRCode",
     "pyzbar": "pyzbar",
@@ -82,6 +85,25 @@ class QRDetection:
     text: str
     points: np.ndarray | None = None
     rect: tuple[int, int, int, int] | None = None
+
+
+@dataclass
+class RecognitionStats:
+    attempts: int = 0
+    hits: int = 0
+    last_ms: float = 0.0
+
+    def update(self, detections: list[QRDetection], elapsed_ms: float) -> None:
+        self.attempts += 1
+        self.last_ms = elapsed_ms
+        if detections:
+            self.hits += 1
+
+    @property
+    def rate(self) -> float:
+        if self.attempts == 0:
+            return 0.0
+        return 100.0 * self.hits / self.attempts
 
 
 class OpenCVQRDetector:
@@ -232,6 +254,26 @@ class QReaderQRDetector:
         return detections
 
 
+class PipelineQRDetector:
+    key = "pipeline"
+    label = ALGORITHM_LABELS[key]
+
+    def __init__(self, detectors):
+        self.detectors = detectors
+        self.label = "Pipeline " + " -> ".join(detector.label for detector in detectors)
+
+    def detect(self, frame) -> list[QRDetection]:
+        for detector in self.detectors:
+            try:
+                detections = detector.detect(frame)
+            except Exception as exc:
+                print(f"warning: {detector.label} failed in pipeline: {exc}")
+                continue
+            if detections:
+                return detections
+        return []
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Preview a TIS GigE camera and overlay QR recognition results."
@@ -252,7 +294,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--algorithm",
-        choices=["select", "opencv", "wechat", "pyzbar", "qreader", "all"],
+        choices=[
+            "select",
+            "pipeline",
+            "opencv",
+            "wechat",
+            "pyzbar",
+            "qreader",
+            "all",
+        ],
         default="select",
         help="QR algorithm. The default opens a startup button selector.",
     )
@@ -285,6 +335,11 @@ def parse_args() -> argparse.Namespace:
         "--rectify",
         action="store_true",
         help="Apply camera calibration YAML rectification before QR recognition/display/recording.",
+    )
+    parser.add_argument(
+        "--compare-corrections",
+        action="store_true",
+        help="Show RAW, fisheye, and rectify views side by side and track QR hit rate for each.",
     )
     parser.add_argument(
         "--rectify-calib",
@@ -356,6 +411,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--fisheye-output-zoom must be > 0")
     if args.fisheye_resolution_scale <= 0:
         parser.error("--fisheye-resolution-scale must be > 0")
+    if args.compare_corrections and (args.fisheye or args.rectify):
+        parser.error("--compare-corrections cannot be combined with --fisheye or --rectify")
     if (args.window_width is None) != (args.window_height is None):
         parser.error("--window-width and --window-height must be specified together")
     return args
@@ -414,15 +471,24 @@ def check_algorithm_statuses(model_dir: Path) -> dict[str, AlgorithmStatus]:
         qreader_available,
         qreader_reason,
     )
+
+    pipeline_keys = [key for key in PIPELINE_ORDER if statuses[key].available]
+    statuses["pipeline"] = AlgorithmStatus(
+        "pipeline",
+        ALGORITHM_LABELS["pipeline"],
+        bool(pipeline_keys),
+        "OpenCV, pyzbar, and WeChat are all unavailable",
+    )
     return statuses
 
 
 def make_button_specs(statuses: dict[str, AlgorithmStatus]) -> list[ButtonSpec]:
     specs = [
-        ("opencv", 50, 120),
-        ("wechat", 50, 190),
+        ("pipeline", 50, 120),
+        ("opencv", 50, 190),
         ("pyzbar", 50, 260),
-        ("qreader", 390, 120),
+        ("wechat", 390, 120),
+        ("qreader", 390, 190),
     ]
     buttons = [
         ButtonSpec(
@@ -439,7 +505,7 @@ def make_button_specs(statuses: dict[str, AlgorithmStatus]) -> list[ButtonSpec]:
         ButtonSpec(
             "all",
             ALGORITHM_LABELS["all"],
-            (390, 190, 280, 60),
+            (390, 260, 280, 60),
             any_available,
             "no available algorithms",
         )
@@ -464,7 +530,7 @@ def draw_algorithm_selector(
     )
     cv2.putText(
         canvas,
-        "Click a button or press 1-5. Esc/q cancels.",
+        "Click a button or press 1-6. Esc/q cancels.",
         (50, 86),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.48,
@@ -539,7 +605,7 @@ def select_algorithm_with_buttons(statuses: dict[str, AlgorithmStatus]) -> str:
             key = cv2.waitKey(50) & 0xFF
             if key in (27, ord("q")):
                 raise KeyboardInterrupt("algorithm selection cancelled")
-            if ord("1") <= key <= ord("5"):
+            if ord("1") <= key <= ord("6"):
                 index = key - ord("1")
                 if index < len(buttons) and buttons[index].enabled:
                     selected_key = buttons[index].key
@@ -598,11 +664,12 @@ def make_startup_buttons(
         )
 
     algorithm_specs = [
-        ("opencv", 392, 124),
-        ("wechat", 392, 178),
+        ("pipeline", 392, 124),
+        ("opencv", 392, 178),
         ("pyzbar", 392, 232),
-        ("qreader", 392, 286),
-        ("all", 392, 340),
+        ("wechat", 392, 286),
+        ("qreader", 392, 340),
+        ("all", 392, 394),
     ]
     algorithm_buttons = []
     for key, x, y in algorithm_specs:
@@ -715,7 +782,7 @@ def draw_startup_selector(
     for index, button in enumerate(serial_buttons, start=1):
         draw_button(button, button.key == selected_serial, str(index))
 
-    shortcut_keys = ["A", "S", "D", "F", "G"]
+    shortcut_keys = ["P", "A", "D", "S", "F", "G"]
     for shortcut, button in zip(shortcut_keys, algorithm_buttons):
         draw_button(button, button.key == selected_algorithm, shortcut)
 
@@ -804,6 +871,8 @@ def select_startup_options(
                     selected_serial = serial_buttons[index].key
 
             algorithm_shortcuts = {
+                ord("p"): "pipeline",
+                ord("P"): "pipeline",
                 ord("a"): "opencv",
                 ord("A"): "opencv",
                 ord("s"): "wechat",
@@ -841,6 +910,12 @@ def resolve_algorithm_keys(
 ) -> list[str]:
     if selected_algorithm == "all":
         return [key for key in DETECTOR_ORDER if statuses[key].available]
+    if selected_algorithm == "pipeline":
+        if not statuses["pipeline"].available:
+            raise RuntimeError(
+                f"{ALGORITHM_LABELS['pipeline']} is unavailable: {statuses['pipeline'].reason}"
+            )
+        return ["pipeline"]
 
     status = statuses[selected_algorithm]
     if not status.available:
@@ -849,6 +924,16 @@ def resolve_algorithm_keys(
 
 
 def build_detector(key: str, args: argparse.Namespace):
+    if key == "pipeline":
+        statuses = check_algorithm_statuses(args.wechat_model_dir)
+        detectors = [
+            build_detector(detector_key, args)
+            for detector_key in PIPELINE_ORDER
+            if statuses[detector_key].available
+        ]
+        if not detectors:
+            raise RuntimeError("Pipeline QR detector has no available stages.")
+        return PipelineQRDetector(detectors)
     if key == "opencv":
         return OpenCVQRDetector()
     if key == "wechat":
@@ -871,6 +956,35 @@ def build_corrector(args: argparse.Namespace):
     if args.rectify:
         return RectifyCorrector(args.rectify_calib, args.rectify_alpha)
     return None
+
+
+def build_fisheye_corrector(args: argparse.Namespace) -> FisheyeCorrector:
+    return FisheyeCorrector(
+        f_scale=args.fisheye_f_scale,
+        zoom=args.fisheye_zoom,
+        output_zoom=args.fisheye_output_zoom,
+        resolution_scale=args.fisheye_resolution_scale,
+    )
+
+
+def build_compare_correctors(args: argparse.Namespace):
+    return {
+        "raw": None,
+        "fisheye": build_fisheye_corrector(args),
+        "rectify": RectifyCorrector(args.rectify_calib, args.rectify_alpha),
+    }
+
+
+def run_detectors(detectors, frame) -> tuple[list[QRDetection], float]:
+    start = time.perf_counter()
+    detections: list[QRDetection] = []
+    for detector in detectors:
+        try:
+            detections.extend(detector.detect(frame))
+        except Exception as exc:
+            print(f"warning: {detector.label} failed: {exc}")
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return detections, elapsed_ms
 
 
 def create_preview_window(width: int, height: int) -> None:
@@ -941,23 +1055,81 @@ def put_outlined_text(frame, text: str, origin, scale, color, thickness=1):
     )
 
 
+def detection_anchor(detection: QRDetection) -> tuple[int, int, int, int] | None:
+    if detection.points is not None and len(detection.points) >= 4:
+        points = np.asarray(detection.points, dtype=np.int32).reshape(-1, 2)
+        x = int(np.min(points[:, 0]))
+        y = int(np.min(points[:, 1]))
+        center_x = int(np.mean(points[:, 0]))
+        center_y = int(np.mean(points[:, 1]))
+        return x, y, center_x, center_y
+
+    if detection.rect is not None:
+        x, y, w, h = detection.rect
+        return x, y, int(x + w / 2), int(y + h / 2)
+
+    return None
+
+
+def scale_detections(
+    detections: list[QRDetection],
+    scale: float,
+) -> list[QRDetection]:
+    if np.isclose(scale, 1.0):
+        return detections
+
+    scaled: list[QRDetection] = []
+    for detection in detections:
+        points = None
+        rect = None
+        if detection.points is not None:
+            points = np.round(np.asarray(detection.points, dtype=np.float32) * scale).astype(
+                np.int32
+            )
+        if detection.rect is not None:
+            x, y, w, h = detection.rect
+            rect = (
+                int(round(x * scale)),
+                int(round(y * scale)),
+                max(1, int(round(w * scale))),
+                max(1, int(round(h * scale))),
+            )
+        scaled.append(
+            QRDetection(
+                detection.algorithm,
+                detection.label,
+                detection.text,
+                points=points,
+                rect=rect,
+            )
+        )
+    return scaled
+
+
 def draw_detections(frame, detections: list[QRDetection]) -> None:
     fallback_y = 104
+    stacked_counts: dict[tuple[str, int, int], int] = {}
+    stack_spacing = 24
+
     for detection in detections:
         color = ALGORITHM_COLORS.get(detection.algorithm, (255, 255, 255))
         label = f"{detection.label}: {clip_text(detection.text)}"
         text_origin = (20, fallback_y)
+        anchor = detection_anchor(detection)
 
-        if detection.points is not None and len(detection.points) >= 4:
+        if anchor is not None and detection.points is not None and len(detection.points) >= 4:
             points = np.asarray(detection.points, dtype=np.int32).reshape(-1, 2)
             cv2.polylines(frame, [points], True, color, 2, cv2.LINE_AA)
-            x = int(np.min(points[:, 0]))
-            y = int(np.min(points[:, 1]))
-            text_origin = (max(8, x), max(24, y - 10))
-        elif detection.rect is not None:
+        elif anchor is not None and detection.rect is not None:
             x, y, w, h = detection.rect
             cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2, cv2.LINE_AA)
-            text_origin = (max(8, x), max(24, y - 10))
+
+        if anchor is not None:
+            x, y, center_x, center_y = anchor
+            stack_key = (detection.text, center_x // 80, center_y // 80)
+            stack_index = stacked_counts.get(stack_key, 0)
+            stacked_counts[stack_key] = stack_index + 1
+            text_origin = (max(8, x), max(24, y - 10 - stack_index * stack_spacing))
         else:
             fallback_y += 26
 
@@ -971,6 +1143,7 @@ def draw_status_bar(
     detections: list[QRDetection],
     recording: bool,
     interval: int,
+    stats: RecognitionStats | None = None,
 ) -> None:
     h, w = display_frame.shape[:2]
     bar_h = min(86, max(64, h // 12))
@@ -979,9 +1152,15 @@ def draw_status_bar(
     cv2.addWeighted(overlay, 0.72, display_frame, 0.28, 0, display_frame)
 
     active_text = ", ".join(detector_labels)
+    stats_text = ""
+    if stats is not None and stats.attempts > 0:
+        stats_text = (
+            f"  rate: {stats.hits}/{stats.attempts} "
+            f"({stats.rate:.1f}%)  det: {stats.last_ms:.1f}ms"
+        )
     put_outlined_text(
         display_frame,
-        f"QR: {selected_label}  active: {active_text}  interval: {interval}  hits: {len(detections)}",
+        f"QR: {selected_label}  active: {active_text}  interval: {interval}  hits: {len(detections)}{stats_text}",
         (18, 30),
         0.58,
         (245, 245, 245),
@@ -999,15 +1178,81 @@ def draw_status_bar(
         put_outlined_text(display_frame, "REC", (w - 96, 36), 0.9, (0, 0, 255), 3)
 
 
+def draw_compare_header(
+    frame,
+    title: str,
+    selected_label: str,
+    stats: RecognitionStats,
+    detections: list[QRDetection],
+) -> None:
+    h, w = frame.shape[:2]
+    bar_h = min(92, max(72, h // 11))
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (w, bar_h), (18, 20, 24), -1)
+    cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
+
+    put_outlined_text(
+        frame,
+        f"{title} | {selected_label}",
+        (16, 30),
+        0.68,
+        (245, 245, 245),
+        2,
+    )
+    put_outlined_text(
+        frame,
+        (
+            f"rate {stats.hits}/{stats.attempts} ({stats.rate:.1f}%) "
+            f"hits {len(detections)} det {stats.last_ms:.1f}ms"
+        ),
+        (16, 62),
+        0.52,
+        (205, 215, 225),
+        1,
+    )
+
+
+def stack_compare_frames(frames: list[np.ndarray]) -> np.ndarray:
+    if not frames:
+        raise ValueError("frames must not be empty")
+    target_h = min(frame.shape[0] for frame in frames)
+    resized = []
+    for frame in frames:
+        h, w = frame.shape[:2]
+        if h != target_h:
+            new_w = max(1, int(round(w * target_h / h)))
+            frame = cv2.resize(frame, (new_w, target_h), interpolation=cv2.INTER_AREA)
+        resized.append(frame)
+    return np.hstack(resized)
+
+
 def print_new_detections(
     detections: list[QRDetection],
     last_printed: set[tuple[str, str]],
+    prefix: str = "",
 ) -> set[tuple[str, str]]:
     current = {(detection.algorithm, detection.text) for detection in detections}
     if current and current != last_printed:
         for algorithm, text in sorted(current):
-            print(f"Detected [{ALGORITHM_LABELS.get(algorithm, algorithm)}]: {text}")
+            print(
+                f"Detected {prefix}[{ALGORITHM_LABELS.get(algorithm, algorithm)}]: {text}"
+            )
     return current
+
+
+def print_stats_summary(stats_by_view: dict[str, RecognitionStats]) -> None:
+    if not stats_by_view:
+        return
+    print("\n=== QR recognition summary ===")
+    for view_key, stat in stats_by_view.items():
+        if stat.attempts == 0:
+            print(f"{view_key}: no inference samples")
+            continue
+        print(
+            f"{view_key}: {stat.hits}/{stat.attempts} hits "
+            f"({stat.rate:.1f}%), det={stat.last_ms:.1f}ms"
+        )
+    print("==============================\n")
 
 
 def main() -> None:
@@ -1026,7 +1271,8 @@ def main() -> None:
 
     detector_keys = resolve_algorithm_keys(selected_algorithm, statuses)
     detectors = [build_detector(key, args) for key in detector_keys]
-    corrector = build_corrector(args)
+    corrector = None if args.compare_corrections else build_corrector(args)
+    compare_correctors = build_compare_correctors(args) if args.compare_corrections else None
 
     pipeline = make_pipeline(selected_serial, args.mode)
     cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
@@ -1042,6 +1288,8 @@ def main() -> None:
     print("display_scale:", args.display_scale)
     if corrector is not None:
         print("correction:", "fisheye" if args.fisheye else "rectify")
+    if compare_correctors is not None:
+        print("correction_compare: raw, fisheye, rectify")
 
     if not cap.isOpened():
         raise RuntimeError("failed to open camera via GStreamer/tcamsrc")
@@ -1057,7 +1305,11 @@ def main() -> None:
     fps = MODE_FPS[args.mode]
     frame_index = 0
     cached_detections: list[QRDetection] = []
+    stats = RecognitionStats()
     last_printed: set[tuple[str, str]] = set()
+    compare_cached = {key: [] for key in ("raw", "fisheye", "rectify")}
+    compare_stats = {key: RecognitionStats() for key in ("raw", "fisheye", "rectify")}
+    compare_last_printed = {key: set() for key in ("raw", "fisheye", "rectify")}
 
     try:
         while True:
@@ -1065,36 +1317,90 @@ def main() -> None:
             if not ok:
                 continue
 
-            if corrector is not None:
-                frame = corrector.apply(frame)
+            if compare_correctors is not None:
+                variant_frames = {}
+                for view_key, view_corrector in compare_correctors.items():
+                    if view_corrector is None:
+                        variant_frames[view_key] = frame
+                    else:
+                        variant_frames[view_key] = view_corrector.apply(frame)
 
-            if frame_index % args.qr_interval == 0:
-                fresh_detections: list[QRDetection] = []
-                for detector in detectors:
-                    try:
-                        fresh_detections.extend(detector.detect(frame))
-                    except Exception as exc:
-                        print(f"warning: {detector.label} failed: {exc}")
-                cached_detections = fresh_detections
-                last_printed = print_new_detections(cached_detections, last_printed)
+                if frame_index % args.qr_interval == 0:
+                    for view_key, view_frame in variant_frames.items():
+                        detections, elapsed_ms = run_detectors(detectors, view_frame)
+                        compare_cached[view_key] = detections
+                        compare_stats[view_key].update(detections, elapsed_ms)
+                        compare_last_printed[view_key] = print_new_detections(
+                            detections,
+                            compare_last_printed[view_key],
+                            prefix=f"{view_key} ",
+                        )
 
-            frame_index += 1
+                frame_index += 1
 
-            annotated_frame = frame.copy()
-            draw_detections(annotated_frame, cached_detections)
+                panels = []
+                for view_key, title in (
+                    ("raw", "RAW"),
+                    ("fisheye", "FISHEYE"),
+                    ("rectify", "RECTIFY"),
+                ):
+                    panel = resize_for_display(
+                        variant_frames[view_key].copy(),
+                        args.display_scale,
+                    )
+                    draw_detections(
+                        panel,
+                        scale_detections(compare_cached[view_key], args.display_scale),
+                    )
+                    draw_compare_header(
+                        panel,
+                        title,
+                        ALGORITHM_LABELS[selected_algorithm],
+                        compare_stats[view_key],
+                        compare_cached[view_key],
+                    )
+                    panels.append(panel)
+
+                annotated_frame = stack_compare_frames(panels)
+            else:
+                if corrector is not None:
+                    frame = corrector.apply(frame)
+
+                if frame_index % args.qr_interval == 0:
+                    cached_detections, elapsed_ms = run_detectors(detectors, frame)
+                    stats.update(cached_detections, elapsed_ms)
+                    last_printed = print_new_detections(cached_detections, last_printed)
+
+                frame_index += 1
+
+                annotated_frame = frame.copy()
+                draw_detections(annotated_frame, cached_detections)
 
             if recording and writer is not None:
                 writer.write(annotated_frame)
 
-            display_frame = resize_for_display(annotated_frame, args.display_scale)
-            draw_status_bar(
-                display_frame,
-                ALGORITHM_LABELS[selected_algorithm],
-                [detector.label for detector in detectors],
-                cached_detections,
-                recording,
-                args.qr_interval,
-            )
+            if compare_correctors is not None:
+                display_frame = annotated_frame
+                if recording:
+                    put_outlined_text(
+                        display_frame,
+                        "REC",
+                        (display_frame.shape[1] - 96, 36),
+                        0.9,
+                        (0, 0, 255),
+                        3,
+                    )
+            else:
+                display_frame = resize_for_display(annotated_frame, args.display_scale)
+                draw_status_bar(
+                    display_frame,
+                    ALGORITHM_LABELS[selected_algorithm],
+                    [detector.label for detector in detectors],
+                    cached_detections,
+                    recording,
+                    args.qr_interval,
+                    stats,
+                )
 
             cv2.imshow(WINDOW_NAME, display_frame)
             key = cv2.waitKey(1) & 0xFF
@@ -1132,6 +1438,10 @@ def main() -> None:
                 break
 
     finally:
+        if compare_correctors is not None:
+            print_stats_summary(compare_stats)
+        else:
+            print_stats_summary({"current": stats})
         if writer is not None:
             writer.release()
         cap.release()

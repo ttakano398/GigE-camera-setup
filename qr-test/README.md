@@ -46,7 +46,7 @@ python qr-test/viewer_qr.py --algorithm opencv --serial 08520932 --mode fhd
 起動画面のキー操作:
 
 - serial: `1` から `8`
-- algorithm: `A` OpenCV, `S` WeChat, `D` pyzbar, `F` QReader, `G` all
+- algorithm: `P` pipeline, `A` OpenCV, `D` pyzbar, `S` WeChat, `F` QReader, `G` all
 - `Enter`: 開始
 - `q` / `Esc`: キャンセル
 
@@ -57,8 +57,21 @@ python qr-test/viewer_qr.py --algorithm opencv --rectify --serial 08520932 --mod
 python qr-test/viewer_qr.py --algorithm opencv --fisheye --serial 08520932 --mode fhd
 ```
 
+RAW / fisheye / rectify を同時に並べて、各表示の QR hit 率を比較する場合:
+
+```bash
+python qr-test/viewer_qr.py \
+  --algorithm pipeline \
+  --compare-corrections \
+  --serial 08520932 \
+  --mode max \
+  --qr-interval 6 \
+  --display-scale 0.33
+```
+
 ## アルゴリズム
 
+- `pipeline`: `opencv -> pyzbar -> wechat` の順に試し、読めた段階で止める軽量カスケード
 - `opencv`: OpenCV 標準 `QRCodeDetector`
 - `wechat`: OpenCV WeChat QRCode。別途 `qr-test/opencv_3rdparty` にモデルファイルが必要
 - `pyzbar`: `pyzbar` + OS 側の `zbar/libzbar`
