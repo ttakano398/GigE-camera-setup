@@ -7,6 +7,7 @@
 - `qr-test/viewer_qr.py`: GigE 映像に QR 認識結果を重ねて表示するビューワ
 - `qr-test/setup_qr.sh`: 既存 `.venv` に QR 用 Python パッケージだけを追加するスクリプト
 - `continue_calib-gige.py`: `tcamsrc` + `TcamPropertyProvider` で live 更新しながら自動キャリブレーションする本命ツール
+- `camera_rectify/calib_charuco.py`: `viewer.py` のキャプチャ画像から ChArUco ボードで `viewer.py --rectify` 用の `camera_calib.yaml` を作るツール
 - `*-opencv*`: A 方針の参考実装
 
 ## パイプライン概要
@@ -146,6 +147,19 @@ python continue_calib-gige.py --serial 08520932 --mode fhd --marker aruco
 3. QR が必要な場合は `qr-test/setup_qr.sh` を実行し、`qr-test/viewer_qr.py` を起動する
 4. `continue_calib-gige.py` を起動する
 5. `c` で自動キャリブレーションを開始する
+
+## 8.1 ChArUco ボードで rectify 用キャリブレーション
+
+`viewer.py` の `c` キーで未補正画像を `camera_rectify/capture/` に保存し、ChArUco ボードから `camera_rectify/camera_calib.yaml` を作れます。
+
+```bash
+source .venv/bin/activate
+python viewer.py --serial 08520932 --mode max
+python camera_rectify/calib_charuco.py --save-vis
+python viewer.py --serial 08520932 --mode max --rectify --rectify-calib camera_rectify/camera_calib.yaml
+```
+
+ボードのマス数・実寸・辞書は `camera_rectify/calib_charuco.py` 先頭の `User-configurable board parameters` を編集します。詳しい手順は `camera_rectify/README_charuco.md` を参照してください。
 
 ## 9. トラブルシュート
 
