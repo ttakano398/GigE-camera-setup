@@ -36,11 +36,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_IMAGE_DIR = SCRIPT_DIR / "capture"
 
-DEFAULT_OUT_YAML = SCRIPT_DIR / "camera_calib-ch-ratthin.yaml"
-DEFAULT_OUT_NPZ = SCRIPT_DIR / "camera_calib-ch-ratthin.npz"
+DEFAULT_OUT_YAML = SCRIPT_DIR / "camera_calib-ch-rat.yaml"
+DEFAULT_OUT_NPZ = SCRIPT_DIR / "camera_calib-ch-rat.npz"
 
-DEFAULT_VIS_DIR = SCRIPT_DIR / "charuco_detected-ratthin"
-DEFAULT_REPROJ_VIS_DIR = SCRIPT_DIR / "reprojection_errors-ratthin"
+DEFAULT_VIS_DIR = SCRIPT_DIR / "charuco_detected-rat"
+DEFAULT_REPROJ_VIS_DIR = SCRIPT_DIR / "reprojection_errors-rat"
 
 
 # ============================================================
@@ -65,7 +65,7 @@ MIN_CHARUCO_CORNERS = 8
 # OpenCV calibration flags.
 CALIBRATION_FLAGS = (
     cv2.CALIB_RATIONAL_MODEL
-    | cv2.CALIB_THIN_PRISM_MODEL
+    # | cv2.CALIB_THIN_PRISM_MODEL
 )
 
 # Examples:
