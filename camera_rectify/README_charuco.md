@@ -18,9 +18,8 @@
 キャリブレーション用画像は未補正の RAW 表示から保存します。`--rectify` や `--fisheye` は付けずに起動してください。
 
 ```bash
-cd /Users/takanotaisei/Documents/NI/GigE-setup
 source .venv/bin/activate
-python viewer.py --serial 08520932 --mode max
+python viewer.py --serial 08621016 --mode max
 ```
 
 `c` キーで `camera_rectify/capture/` に PNG が保存されます。20-40 枚程度を目安に、画面の中央・四隅・斜め・距離違いを混ぜます。
@@ -49,10 +48,10 @@ python camera_rectify/calib_charuco.py \
 
 ```bash
 python viewer.py \
-  --serial 08520932 \
+  --serial 08621016 \
   --mode max \
   --rectify \
-  --rectify-calib camera_rectify/camera_calib.yaml
+  --rectify-calib camera_rectify/camera_calib-ch.yaml
 ```
 
 `viewer.py` 側は YAML 内の `image_width` / `image_height` と現在の表示解像度が違う場合、内部パラメータ `K` を解像度比でスケールします。精度確認は、できるだけキャリブレーション時と同じ `--mode` で行ってください。

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 
-DEFAULT_SERIAL = "08520932"
+DEFAULT_SERIAL = "21620595"
 WINDOW_NAME = "GigE Camera Viewer"
 SCRIPT_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SCRIPT_DIR / "camera_rectify" / "capture"

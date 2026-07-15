@@ -1,0 +1,23 @@
+%YAML:1.0
+---
+rms: 6.5468072911181636
+image_width: 2592
+image_height: 1944
+K: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1071.9453824791253, 0., 1249.4448970047251, 0.,
+       1092.9461340244588, 969.14776176234989, 0., 0., 1. ]
+dist: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ -0.40628613041252432, 0.12903030478819305,
+       -0.00011943397807955903, 0.0023018789824214431,
+       -0.015804396100619685 ]
+board_squares_x: 7
+board_squares_y: 5
+board_square_length: 0.0287
+board_marker_length: 0.021000000000000001
+board_dictionary: DICT_4X4_50

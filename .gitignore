@@ -59,3 +59,5 @@ qr-test/opencv_3rdparty/*
 
 # Local scratch
 try.sh
+
+camera_rectify/charuco_detected*/
